@@ -8,15 +8,15 @@ import (
 type Entry struct {
 	Id           string
 	TotalHits    uint64
-	StatusCodes  map[int]int
-	MethodsStats map[string]int
+	StatusCodes  map[int]uint64
+	MethodsStats map[string]uint64
 }
 
 func NewEntry() *Entry {
 	return &Entry{
 		"", 0,
-		make(map[int]int),
-		make(map[string]int),
+		make(map[int]uint64),
+		make(map[string]uint64),
 	}
 }
 
