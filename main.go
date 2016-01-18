@@ -2,10 +2,9 @@ package main
 
 import (
 	"flag"
-	"fmt"
-	"log"
-
+	_ "fmt"
 	"github.com/hpcloud/tail"
+	"log"
 )
 
 var threshold int
@@ -32,7 +31,6 @@ func openAndReadFile(filename string) *tail.Tail {
 	if err != nil {
 		panic(err)
 	}
-
 	return t
 }
 
@@ -41,8 +39,13 @@ func main() {
 	t := openAndReadFile(filename)
 	queue := make(chan *Log)
 	go process(t, queue)
-	for x := range queue {
-		fmt.Println(x)
-	}
+
+	/*
+		for x := range queue {
+			fmt.Println(x)
+		}
+	*/
+	memory := NewCache()
+	store(memory, queue)
 
 }
