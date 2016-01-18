@@ -38,14 +38,8 @@ func main() {
 	parse()
 	t := openAndReadFile(filename)
 	queue := make(chan *Log)
-	go process(t, queue)
-
-	/*
-		for x := range queue {
-			fmt.Println(x)
-		}
-	*/
-	memory := NewCache()
-	store(memory, queue)
+	storage := NewCache()
+	go Process(t, queue)
+	go Store(storage, queue)
 
 }
