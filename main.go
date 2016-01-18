@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 
 	"github.com/hpcloud/tail"
@@ -38,7 +39,10 @@ func openAndReadFile(filename string) *tail.Tail {
 func main() {
 	parse()
 	t := openAndReadFile(filename)
+	queue := make(chan *Log)
+	go process(t, queue)
+	for x := range queue {
+		fmt.Println(x)
+	}
 
-	var cache map[string][]Log
-	process(t, cache)
 }
