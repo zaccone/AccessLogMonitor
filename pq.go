@@ -10,7 +10,7 @@ func (pq PriorityQueue) Len() int { return len(pq) }
 
 func (pq PriorityQueue) Less(i, j int) bool {
 	// Condition for implementing minheap
-	return pq[i].TotalHits < pq[j].TotalHits
+	return pq[i].TotalHits > pq[j].TotalHits
 }
 
 func (pq PriorityQueue) Swap(i, j int) {
