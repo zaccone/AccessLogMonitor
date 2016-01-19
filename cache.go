@@ -3,8 +3,11 @@ package main
 import (
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/oleiade/lane"
 )
 
 const (
@@ -13,12 +16,33 @@ const (
 	StandardStatsInterval = 10
 )
 
+type StatusCodeMap map[int]uint64
+
+func (scm StatusCodeMap) String() string {
+	s := ""
+	for status, cnt := range scm {
+		s += fmt.Sprintf("%d: %d, ", status, cnt)
+	}
+	return strings.Trim(s, ",")
+}
+
+type MethodStatsMap map[string]uint64
+
+func (msm MethodStatsMap) String() string {
+	s := ""
+	for method, cnt := range msm {
+		s += fmt.Sprintf("%s: %d, ", method, cnt)
+	}
+	return strings.Trim(s, ",")
+}
+
 type Entry struct {
 	Id           string
 	TotalHits    uint64
-	StatusCodes  map[int]uint64
-	MethodsStats map[string]uint64
-
+	StatusCodes  StatusCodeMap
+	MethodsStats MethodStatsMap
+	Logs         *lane.Deque
+	HighRate     bool
 	// used by heap.Interface
 	index int
 }
@@ -26,14 +50,16 @@ type Entry struct {
 func NewEntry() *Entry {
 	return &Entry{
 		"", 0,
-		make(map[int]uint64),
-		make(map[string]uint64),
+		make(StatusCodeMap),
+		make(MethodStatsMap),
+		lane.NewDeque(),
+		false,
 		-1,
 	}
 }
 
-func (e *Entry) Stringer() string {
-	return fmt.Sprintf("Section:/%s,\nHits: %d\n\tStatus Stats: %v\n\tMethodStats %v\n",
+func (e *Entry) String() string {
+	return fmt.Sprintf("Section:/%s,\nHits: %d\n\tStatus Stats: %s\n\tMethodStats %s\n",
 		e.Id, e.TotalHits, e.StatusCodes, e.MethodsStats)
 }
 
@@ -59,6 +85,7 @@ func Store(storage *Cache, queue chan *Log) {
 
 		var e *Entry = nil
 		var isNew bool
+
 		if _, ok := storage.Memory[l.Section]; ok == false {
 
 			e = NewEntry()
@@ -72,13 +99,11 @@ func Store(storage *Cache, queue chan *Log) {
 		}
 
 		// update counters
-
 		e.StatusCodes[l.Status]++
 		e.MethodsStats[l.Method]++
 		e.TotalHits++
 
 		// update priority queue
-
 		if isNew {
 			storage.Pq.Push(e)
 		} else {
@@ -96,48 +121,87 @@ func Store(storage *Cache, queue chan *Log) {
 				storage.Pq = storage.Pq[:HeapLenght]
 			}
 		*/
+		e.Logs.Append(l)
+
 		storage.m.Unlock()
 	}
 }
 
-func StandardAlert(storage *Cache) {
-	c := time.Tick(StandardStatsInterval * time.Second)
+func StandardAlert(storage *Cache,
+	sink chan StatsEvent) {
+
+	timer := time.Tick(StandardStatsInterval * time.Second)
 
 	var totalHits uint64 = 0
 	statusCodes := make(map[int]uint64)
 
-	for now := range c {
+	for now := range timer {
 
 		totalHits = 0
 		for k, _ := range statusCodes {
 			statusCodes[k] = 0
 		}
-
 		storage.m.Lock()
 		for _, val := range storage.Pq {
 			totalHits += val.TotalHits
 			for status, cnt := range val.StatusCodes {
 				statusCodes[status/100] += cnt
 			}
-
 		}
-
 		l := math.Min(float64(HeapLenght), float64(storage.Pq.Len()))
 		limit := int(math.Min(StatsLimit, l))
+		tophits := make([]*Entry, limit)
+		copy(tophits, storage.Pq[:limit])
 
-		tophits := storage.Pq[:limit]
+		sink <- StatsEvent{now, totalHits, statusCodes, tophits}
 		storage.m.Unlock()
-
-		fmt.Printf("======== %v ======\n", now)
-
-		fmt.Printf("Total Hits: %d, Hit statistics:\n\t2xx: %d, 3xx: %d, 4xx: %d, 5xx: %d\n",
-			totalHits, statusCodes[2], statusCodes[3], statusCodes[4], statusCodes[5])
-		fmt.Printf("Sections with most hits so far (%d):\n", limit)
-		for _, h := range tophits {
-			fmt.Println(h.Stringer())
-		}
-		fmt.Printf("=======================================================\n")
-
 	}
 
+}
+
+func AnalyzeAndTrimLogs(e *Entry, now time.Time,
+	alert, calm chan AlertEvent,
+	treshold, timeWindow int) {
+
+	// setup TimeWindow to (Now - timeWindow minutes)
+	TimeWindow := now.Add((time.Minute * time.Duration(timeWindow)) * (-1))
+
+	for !e.Logs.Empty() && e.Logs.First().(*Log).Time.Before(TimeWindow) {
+		e.Logs.Shift()
+	}
+
+	if e.Logs.Size() > treshold {
+		e.HighRate = true
+		alert <- AlertEvent{e, now}
+	} else if e.HighRate {
+		e.HighRate = false
+		calm <- AlertEvent{e, now}
+	}
+}
+
+func Dispatcher(storage *Cache, treshold, timeWindow int) {
+
+	timer := time.Tick(time.Minute * time.Duration(timeWindow))
+
+	alerts := make(chan AlertEvent, 10)
+	calm := make(chan AlertEvent, 10)
+	stats := make(chan StatsEvent, 10)
+
+	defer close(alerts)
+	defer close(calm)
+	defer close(stats)
+
+	go StandardAlert(storage, stats)
+	go Output(alerts, calm, stats)
+
+	for {
+		//block until timer 'ticks'
+		<-timer
+		storage.m.Lock()
+		now := time.Now()
+		for _, e := range storage.Memory {
+			go AnalyzeAndTrimLogs(e, now, alerts, calm, treshold, timeWindow)
+		}
+		storage.m.Unlock()
+	}
 }

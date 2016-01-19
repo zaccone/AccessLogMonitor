@@ -7,18 +7,24 @@ import (
 	"log"
 )
 
-var threshold int
+var treshold int
+var timeWindow int
 var filename string
 
 func parse() {
-	flag.IntVar(&threshold, "t", 10, "Requests/second upper limit")
+	flag.IntVar(&treshold, "t", 10, "Requests/minute upper limit")
+	flag.IntVar(&timeWindow, "w", 2, "Time window span (in minutes)")
 	flag.StringVar(&filename, "f", "", "File to be processed")
 
 	// parse flags and check values for their correctness
 	flag.Parse()
 
-	if threshold < 1 {
+	if treshold < 1 {
 		log.Fatal("Threshold cannot be negative")
+	}
+
+	if timeWindow < 1 {
+		log.Fatal("TimeWindow must be positive number")
 	}
 
 	if filename == "" {
@@ -41,6 +47,5 @@ func main() {
 	storage := NewCache()
 	go Process(t, queue)
 	go Store(storage, queue)
-	StandardAlert(storage)
-
+	Dispatcher(storage, treshold*timeWindow, timeWindow)
 }
