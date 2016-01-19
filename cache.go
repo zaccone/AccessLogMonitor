@@ -2,10 +2,16 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sync"
+	"time"
 )
 
-const HeapLenght = 10
+const (
+	HeapLenght            = 100
+	StatsLimit            = 10
+	StandardStatsInterval = 10
+)
 
 type Entry struct {
 	Id           string
@@ -22,13 +28,13 @@ func NewEntry() *Entry {
 		"", 0,
 		make(map[int]uint64),
 		make(map[string]uint64),
-		0,
+		-1,
 	}
 }
 
 func (e *Entry) Stringer() string {
-	return fmt.Sprintf("Id: >>%s<<\n\tStatus Stats: %v\n\tMethodStats %v\n",
-		e.Id, e.StatusCodes, e.MethodsStats)
+	return fmt.Sprintf("Section:/%s,\nHits: %d\n\tStatus Stats: %v\n\tMethodStats %v\n",
+		e.Id, e.TotalHits, e.StatusCodes, e.MethodsStats)
 }
 
 type Cache struct {
@@ -73,17 +79,65 @@ func Store(storage *Cache, queue chan *Log) {
 
 		// update priority queue
 
-		if isNew && storage.Pq.Len() < HeapLenght {
-			storage.Pq = append(storage.Pq, e)
-		} else if isNew {
-			heap.Push(&storage.Pq, e)
+		if isNew {
+			storage.Pq.Push(e)
+		} else {
 			storage.Pq.update(e)
-			for storage.Pq.Len() > HeapLenght {
-				storage.Pq.Pop()
-			}
 		}
 
-		fmt.Println(e.Stringer())
+		//TODO(marek): trim or not to trim the pq?
+		/*
+			if storage.Pq.Len() > HeapLenght {
+				for i := HeapLenght - 1; i < storage.Pq.Len(); i++ {
+					storage.Pq[i].index = -1
+				}
+
+				//trim priority queue
+				storage.Pq = storage.Pq[:HeapLenght]
+			}
+		*/
 		storage.m.Unlock()
 	}
+}
+
+func StandardAlert(storage *Cache) {
+	c := time.Tick(StandardStatsInterval * time.Second)
+
+	var totalHits uint64 = 0
+	statusCodes := make(map[int]uint64)
+
+	for now := range c {
+
+		totalHits = 0
+		for k, _ := range statusCodes {
+			statusCodes[k] = 0
+		}
+
+		storage.m.Lock()
+		for _, val := range storage.Pq {
+			totalHits += val.TotalHits
+			for status, cnt := range val.StatusCodes {
+				statusCodes[status/100] += cnt
+			}
+
+		}
+
+		l := math.Min(float64(HeapLenght), float64(storage.Pq.Len()))
+		limit := int(math.Min(StatsLimit, l))
+
+		tophits := storage.Pq[:limit]
+		storage.m.Unlock()
+
+		fmt.Printf("======== %v ======\n", now)
+
+		fmt.Printf("Total Hits: %d, Hit statistics:\n\t2xx: %d, 3xx: %d, 4xx: %d, 5xx: %d\n",
+			totalHits, statusCodes[2], statusCodes[3], statusCodes[4], statusCodes[5])
+		fmt.Printf("Sections with most hits so far (%d):\n", limit)
+		for _, h := range tophits {
+			fmt.Println(h.Stringer())
+		}
+		fmt.Printf("=======================================================\n")
+
+	}
+
 }

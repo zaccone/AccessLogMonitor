@@ -41,5 +41,6 @@ func main() {
 	storage := NewCache()
 	go Process(t, queue)
 	go Store(storage, queue)
+	StandardAlert(storage)
 
 }
